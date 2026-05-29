@@ -38,12 +38,14 @@ Telegram, and the server log.
 
 Every step is visible in the live monitor with token + cost telemetry.
 
-**The human-in-the-loop, on Telegram:**
+**The human-in-the-loop, on Telegram** — real conversation with the live bot
+(`@Arghya_agent_bot`): the fraud alert and dispatch (left), then the
+investigator verdict, the operator's `Yes`, and the executed block (right).
 
-![Telegram fraud escalation](images/telegram-flow.png)
-
-<!-- Add your phone screenshot of the live bot conversation as
-     images/telegram-flow.png (alert → investigate → verdict → approve → done). -->
+<p align="center">
+  <img src="images/telegram-flow-1.jpg" width="46%" alt="Telegram: fraud alert and dispatch to investigator" />
+  <img src="images/telegram-flow-2.jpg" width="46%" alt="Telegram: verdict, approval, and block executed" />
+</p>
 
 ## 2. The UI
 

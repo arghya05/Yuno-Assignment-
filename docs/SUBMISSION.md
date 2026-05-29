@@ -507,13 +507,17 @@ Saving writes to `agents/<name>.md`; the next run uses it, no restart:
 
 ![Live agent editor](../images/agent-editor.png)
 
-**The human-in-the-loop on Telegram** — the bot DMs the operator a fraud
-alert (txn id, amount, merchant, risk score), the operator replies to
-investigate, the bot returns the investigator's verdict and asks for
-approval, the operator replies `Yes`, and the bot confirms the block was
-executed:
+**The human-in-the-loop on Telegram** — a real conversation with the live
+bot (`@Arghya_agent_bot`). The bot DMs the operator a fraud alert (txn id,
+amount, merchant, risk score) and dispatches to the investigator:
 
-![Telegram fraud escalation](../images/telegram-flow.png)
+![Telegram — fraud alert and dispatch](../images/telegram-flow-1.jpg){width=52%}
+
+The investigator returns its verdict with the key signals, the bot asks for
+approval, the operator replies `Yes`, and the bot confirms the block was
+executed — then surfaces the next pending item (txn_005):
+
+![Telegram — verdict, approval, and block executed](../images/telegram-flow-2.jpg){width=52%}
 
 All screenshots live in the repository under `images/`.
 
