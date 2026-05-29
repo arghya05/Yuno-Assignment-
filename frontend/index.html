@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Yuno Agents</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    :root { font-family: ui-sans-serif, system-ui, -apple-system, "SF Pro Text", "Inter", sans-serif; }
+    body { background: #020617; color: #e2e8f0; }
+    .mono { font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace; }
+    .ring-status { animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+    .scroll::-webkit-scrollbar { width: 6px; height: 6px }
+    .scroll::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px }
+    .node-rect { fill: #0f172a; stroke: #1e293b; stroke-width: 1.5; transition: stroke .2s, fill .2s; }
+    .node-rect:hover { stroke: #22d3ee; cursor: pointer; }
+    .node-rect.active { fill: #0c2a3a; stroke: #22d3ee; }
+    .node-rect.running { stroke: #f59e0b; }
+    .edge-path { fill: none; stroke: #334155; stroke-width: 1.5; }
+    .edge-path.feedback { stroke-dasharray: 4 4; }
+    .edge-label { fill: #64748b; font-size: 11px; font-family: ui-monospace, monospace; }
+    .arrow-head { fill: #475569; }
+  </style>
+</head>
+<body x-data="app()" x-init="boot()" class="min-h-screen">
+
+<!-- Top bar -->
+<header class="border-b border-slate-800 bg-slate-950">
+  <div class="px-5 py-3 flex items-center gap-6">
+    <div class="flex items-center gap-2">
+      <div class="w-2 h-2 rounded-full bg-emerald-400 ring-status"></div>
+      <span class="font-semibold tracking-tight">YUNO AGENTS</span>
+      <span class="text-slate-500 text-xs mono">v0.1</span>
+    </div>
+    <div class="text-slate-500 text-xs mono">always-on agent orchestration · custom runtime · SOUL.md</div>
+    <div class="ml-auto flex items-center gap-5 text-xs">
+      <button @click="openDiff()" class="text-cyan-300 hover:text-cyan-200 mono">/diff</button>
+      <div class="flex items-center gap-2">
+        <span class="text-slate-500">telegram:</span>
+        <span class="mono" :class="metrics.telegram?.enabled ? 'text-emerald-400' : 'text-slate-500'">
+          <span x-text="metrics.telegram?.enabled ? '@' + metrics.telegram.bot_username : 'disabled'"></span>
+        </span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-slate-500">runs:</span>
+        <span class="mono text-slate-200" x-text="metrics.total_runs ?? 0"></span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-slate-500">total cost:</span>
+        <span class="mono text-cyan-400" x-text="'$' + (metrics.total_cost_usd ?? 0).toFixed(4)"></span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- Metric cards -->
+<section class="grid grid-cols-4 gap-3 px-5 py-4 border-b border-slate-800">
+  <template x-for="agent in agentList" :key="agent">
+    <div class="bg-slate-900 border border-slate-800 rounded-lg p-3"
+         :class="{'ring-1 ring-amber-500/60': (metrics.queue_depths?.[agent] ?? 0) > 0}">
+      <div class="flex items-center justify-between">
+        <span class="font-medium" x-text="agent"></span>
+        <span class="text-[10px] mono uppercase tracking-wider"
+              :class="(metrics.queue_depths?.[agent] ?? 0) > 0 ? 'text-amber-400' : 'text-slate-600'"
+              x-text="(metrics.queue_depths?.[agent] ?? 0) > 0 ? 'running' : 'idle'"></span>
+      </div>
+      <div class="mt-3 grid grid-cols-3 gap-2 text-xs">
+        <div>
+          <div class="text-slate-500 text-[10px] uppercase tracking-wider">runs</div>
+          <div class="mono text-slate-200" x-text="metrics.by_agent?.[agent]?.runs ?? 0"></div>
+        </div>
+        <div>
+          <div class="text-slate-500 text-[10px] uppercase tracking-wider">avg cost</div>
+          <div class="mono text-cyan-400" x-text="'$' + (metrics.by_agent?.[agent]?.avg_cost_usd ?? 0).toFixed(4)"></div>
+        </div>
+        <div>
+          <div class="text-slate-500 text-[10px] uppercase tracking-wider">total</div>
+          <div class="mono text-slate-200" x-text="'$' + (metrics.by_agent?.[agent]?.cost_usd ?? 0).toFixed(4)"></div>
+        </div>
+      </div>
+    </div>
+  </template>
+</section>
+
+<!-- Main grid: agents / canvas / monitor -->
+<main class="grid grid-cols-[260px_1fr_360px] gap-3 px-5 py-4 h-[calc(100vh-280px)]">
+
+  <!-- LEFT: agent list + actions -->
+  <aside class="bg-slate-900 border border-slate-800 rounded-lg flex flex-col overflow-hidden">
+    <div class="px-3 py-2 border-b border-slate-800 text-xs uppercase tracking-wider text-slate-500 mono">Agents</div>
+    <div class="flex-1 overflow-auto scroll">
+      <template x-for="agent in agentDetails" :key="agent.name">
+        <button @click="selectAgent(agent.name)"
+                class="w-full text-left px-3 py-2.5 border-b border-slate-800/50 hover:bg-slate-800/40 transition"
+                :class="{'bg-slate-800/60': selected === agent.name}">
+          <div class="flex items-center justify-between">
+            <span class="font-medium text-sm" x-text="agent.name"></span>
+            <span class="text-[10px] mono text-slate-500" x-text="agent.frontmatter?.mode ?? '?'"></span>
+          </div>
+          <div class="text-[11px] text-slate-500 mt-0.5 mono" x-text="agent.frontmatter?.model ?? ''"></div>
+          <div class="text-[10px] text-slate-600 mt-1" x-text="
+            (agent.frontmatter?.channels?.length ? '📡 ' + agent.frontmatter.channels.join(',') : '') +
+            (agent.frontmatter?.schedule ? ' ⏰ ' + agent.frontmatter.schedule : '')
+          "></div>
+        </button>
+      </template>
+    </div>
+    <div class="border-t border-slate-800 p-3 space-y-2">
+      <button @click="fire('fraud_screener')"
+              class="w-full text-xs font-medium bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 rounded px-3 py-2 hover:bg-cyan-500/20 transition">
+        ▶ Fire fraud_screener
+      </button>
+      <button @click="sendFakeTelegram()"
+              class="w-full text-xs font-medium bg-slate-800 text-slate-300 border border-slate-700 rounded px-3 py-2 hover:bg-slate-700 transition">
+        ✉ Send fake Telegram inbound
+      </button>
+    </div>
+  </aside>
+
+  <!-- CENTER: canvas -->
+  <section class="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden flex flex-col">
+    <div class="px-3 py-2 border-b border-slate-800 flex items-center justify-between">
+      <span class="text-xs uppercase tracking-wider text-slate-500 mono">Dispatch graph</span>
+      <span class="text-[10px] text-slate-600 mono">edges = SOUL.md dispatches_to · labels = `when:` conditions</span>
+    </div>
+    <div class="flex-1 flex items-center justify-center p-4">
+      <svg viewBox="0 0 800 500" class="w-full h-full max-h-[460px]"
+           preserveAspectRatio="xMidYMid meet"
+           @click="onCanvasClick($event)"
+           x-html="graphHTML"></svg>
+    </div>
+  </section>
+
+  <!-- RIGHT: monitor -->
+  <aside class="bg-slate-900 border border-slate-800 rounded-lg flex flex-col overflow-hidden">
+    <div class="px-3 py-2 border-b border-slate-800 flex items-center justify-between">
+      <span class="text-xs uppercase tracking-wider text-slate-500 mono">Live monitor</span>
+      <span class="text-[10px] text-emerald-400 mono">● polling 2s</span>
+    </div>
+    <div class="flex-1 overflow-auto scroll text-xs mono">
+      <template x-for="d in dispatches" :key="d.id">
+        <div class="px-3 py-2 border-b border-slate-800/50 hover:bg-slate-800/30">
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] text-slate-500" x-text="d.created_at?.slice(11,19)"></span>
+            <span class="text-[10px] uppercase tracking-wider"
+                  :class="{
+                    'text-emerald-400': d.status === 'done',
+                    'text-amber-400': d.status === 'processing',
+                    'text-slate-500': d.status === 'queued',
+                    'text-red-400': d.status === 'failed',
+                  }" x-text="d.status"></span>
+          </div>
+          <div class="mt-1 flex items-center gap-1 text-slate-300">
+            <span class="text-slate-500" x-text="d.from_agent || 'external'"></span>
+            <span class="text-slate-600">→</span>
+            <span class="text-cyan-300" x-text="d.to_agent"></span>
+          </div>
+          <div class="text-[11px] text-slate-400 mt-1 truncate" x-text="d.message"></div>
+        </div>
+      </template>
+      <div x-show="dispatches.length === 0" class="text-slate-600 text-center py-8 text-xs">(no dispatches yet)</div>
+    </div>
+  </aside>
+</main>
+
+<!-- Bottom: recent runs -->
+<section class="px-5 py-4 border-t border-slate-800">
+  <div class="text-xs uppercase tracking-wider text-slate-500 mono mb-2">Recent runs</div>
+  <div class="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
+    <table class="w-full text-xs">
+      <thead class="bg-slate-950/50 border-b border-slate-800 text-slate-500">
+        <tr>
+          <th class="px-3 py-2 text-left font-medium">#</th>
+          <th class="px-3 py-2 text-left font-medium">Agent</th>
+          <th class="px-3 py-2 text-left font-medium">Status</th>
+          <th class="px-3 py-2 text-right font-medium">Cost</th>
+          <th class="px-3 py-2 text-left font-medium">Started</th>
+          <th class="px-3 py-2 text-left font-medium">Duration</th>
+          <th class="px-3 py-2 text-left font-medium">Output (first 80)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="r in runs.slice(0, 12)" :key="r.id">
+          <tr class="border-b border-slate-800/50 hover:bg-slate-800/30">
+            <td class="px-3 py-1.5 mono text-slate-500" x-text="r.id"></td>
+            <td class="px-3 py-1.5" x-text="r.agent_name"></td>
+            <td class="px-3 py-1.5">
+              <span class="text-[10px] uppercase mono tracking-wider"
+                    :class="{
+                      'text-emerald-400': r.status === 'completed',
+                      'text-red-400': r.status === 'budget_breach',
+                      'text-amber-400': r.status === 'running',
+                    }" x-text="r.status"></span>
+            </td>
+            <td class="px-3 py-1.5 mono text-cyan-400 text-right" x-text="'$' + (r.cost_usd ?? 0).toFixed(5)"></td>
+            <td class="px-3 py-1.5 mono text-slate-500" x-text="r.started_at?.slice(11,19)"></td>
+            <td class="px-3 py-1.5 mono text-slate-400" x-text="duration(r)"></td>
+            <td class="px-3 py-1.5 text-slate-400 truncate max-w-[400px]" x-text="(r.output_text || '').slice(0, 80).replace(/\n/g,' ')"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Diff modal -->
+<div x-show="diffOpen" x-transition.opacity @keydown.escape.window="diffOpen=false"
+     class="fixed inset-0 bg-black/60 flex items-center justify-center p-8 z-50"
+     @click.self="diffOpen=false">
+  <div class="bg-slate-900 border border-slate-700 rounded-lg max-w-4xl w-full max-h-[85vh] overflow-hidden flex flex-col">
+    <div class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+      <div>
+        <div class="font-semibold">Agent diff</div>
+        <div class="text-xs text-slate-500 mono">git diff -- agents/  (routing &amp; SOUL.md changes across commits)</div>
+      </div>
+      <button @click="diffOpen=false" class="text-slate-500 hover:text-slate-200 text-xl leading-none">×</button>
+    </div>
+    <div class="px-5 py-3 border-b border-slate-800 flex items-center gap-3 text-xs">
+      <span class="text-slate-500 mono">from:</span>
+      <select x-model="diffFrom" class="bg-slate-950 border border-slate-800 rounded px-2 py-1 mono text-slate-200 focus:outline-none focus:border-cyan-500">
+        <template x-for="c in commits" :key="c.sha">
+          <option :value="c.sha" x-text="c.sha + '  ' + c.message"></option>
+        </template>
+      </select>
+      <span class="text-slate-500 mono">to:</span>
+      <select x-model="diffTo" class="bg-slate-950 border border-slate-800 rounded px-2 py-1 mono text-slate-200 focus:outline-none focus:border-cyan-500">
+        <template x-for="c in commits" :key="c.sha">
+          <option :value="c.sha" x-text="c.sha + '  ' + c.message"></option>
+        </template>
+      </select>
+      <button @click="loadDiff()" class="ml-2 text-xs px-3 py-1 rounded bg-cyan-500/20 border border-cyan-500/40 text-cyan-200 hover:bg-cyan-500/30">Compare</button>
+      <span x-show="commits.length === 0" class="text-amber-400 text-[11px]">No commits yet on agents/. Run <span class="mono">git add agents/ && git commit -m "initial agents"</span> in the project root, then edit one and commit again.</span>
+    </div>
+    <div class="flex-1 overflow-auto scroll p-4 text-xs mono leading-5 bg-slate-950"
+         x-html="diffHTML"></div>
+  </div>
+</div>
+
+<!-- Agent detail modal -->
+<div x-show="selected" x-transition.opacity @keydown.escape.window="selected=null"
+     class="fixed inset-0 bg-black/60 flex items-center justify-center p-8 z-50"
+     @click.self="selected=null">
+  <div class="bg-slate-900 border border-slate-700 rounded-lg max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col">
+    <div class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+      <div>
+        <div class="font-semibold" x-text="selected"></div>
+        <div class="text-xs text-slate-500 mono" x-text="(selectedAgent?.frontmatter?.mode ?? '') + ' · ' + (selectedAgent?.frontmatter?.model ?? '')"></div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button x-show="!editMode" @click="enterEdit()"
+                class="text-xs px-3 py-1 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700">Edit</button>
+        <button x-show="editMode" @click="saveEdit()"
+                class="text-xs px-3 py-1 rounded bg-cyan-500/20 border border-cyan-500/40 text-cyan-200 hover:bg-cyan-500/30">Save</button>
+        <button x-show="editMode" @click="editMode=false"
+                class="text-xs px-3 py-1 rounded bg-slate-800 border border-slate-700">Cancel</button>
+        <button @click="selected=null" class="text-slate-500 hover:text-slate-200 text-xl leading-none ml-2">×</button>
+      </div>
+    </div>
+    <div class="flex-1 overflow-auto scroll p-5 text-sm">
+      <!-- view mode -->
+      <template x-if="!editMode">
+        <div>
+          <div class="mb-4">
+            <div class="text-xs uppercase tracking-wider text-slate-500 mono mb-2">Frontmatter</div>
+            <pre class="bg-slate-950 border border-slate-800 rounded p-3 text-xs mono text-slate-300 overflow-auto" x-text="JSON.stringify(selectedAgent?.frontmatter ?? {}, null, 2)"></pre>
+          </div>
+          <div>
+            <div class="text-xs uppercase tracking-wider text-slate-500 mono mb-2">Body (role / interaction_rules / guardrails)</div>
+            <pre class="bg-slate-950 border border-slate-800 rounded p-3 text-xs text-slate-300 whitespace-pre-wrap" x-text="selectedAgent?.body ?? ''"></pre>
+          </div>
+        </div>
+      </template>
+      <!-- edit mode -->
+      <template x-if="editMode">
+        <div>
+          <div class="mb-4">
+            <div class="text-xs uppercase tracking-wider text-slate-500 mono mb-2">Frontmatter (YAML)</div>
+            <textarea x-model="editFM" rows="14"
+                      class="w-full bg-slate-950 border border-slate-800 rounded p-3 text-xs mono text-slate-200 focus:outline-none focus:border-cyan-500"></textarea>
+          </div>
+          <div>
+            <div class="text-xs uppercase tracking-wider text-slate-500 mono mb-2">Body (Markdown)</div>
+            <textarea x-model="editBody" rows="14"
+                      class="w-full bg-slate-950 border border-slate-800 rounded p-3 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"></textarea>
+          </div>
+          <div x-show="editError" class="mt-3 text-xs text-red-400 mono" x-text="editError"></div>
+          <div class="mt-3 text-[11px] text-slate-500">Saving rewrites <span class="mono" x-text="'agents/' + selected + '.md'"></span>. The next dispatch picks up the new version with no restart.</div>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<script>
+const jsToYaml = (obj) => jsyaml.dump(obj, { lineWidth: 100, noRefs: true });
+const parseYaml = (text) => jsyaml.load(text);
+
+function app() {
+  return {
+    metrics: {},
+    runs: [],
+    dispatches: [],
+    agentList: [],
+    agentDetails: [],
+    selected: null,
+    selectedAgent: null,
+    editMode: false,
+    editFM: '',
+    editBody: '',
+    editError: '',
+    diffOpen: false,
+    diffFrom: '',
+    diffTo: '',
+    diffText: '',
+    commits: [],
+    nodes: [],
+    edges: [],
+
+    async boot() {
+      await this.refreshAgents();
+      this.computeGraph();
+      this.poll();
+      setInterval(() => this.poll(), 2000);
+    },
+
+    async refreshAgents() {
+      const names = await fetch('/agents').then(r => r.json());
+      this.agentList = names;
+      this.agentDetails = await Promise.all(names.map(n => fetch('/agents/' + n).then(r => r.json())));
+    },
+
+    async poll() {
+      try {
+        const [m, r, d] = await Promise.all([
+          fetch('/metrics').then(r => r.json()),
+          fetch('/runs').then(r => r.json()),
+          fetch('/dispatches').then(r => r.json()),
+        ]);
+        this.metrics = m;
+        this.runs = r;
+        this.dispatches = d;
+      } catch (e) { console.error(e); }
+    },
+
+    selectAgent(name) {
+      this.selected = name;
+      this.selectedAgent = this.agentDetails.find(a => a.name === name) ?? null;
+      this.editMode = false;
+      this.editError = '';
+    },
+
+    enterEdit() {
+      this.editFM = jsToYaml(this.selectedAgent?.frontmatter ?? {});
+      this.editBody = this.selectedAgent?.body ?? '';
+      this.editError = '';
+      this.editMode = true;
+    },
+
+    async saveEdit() {
+      let fm;
+      try {
+        fm = parseYaml(this.editFM);
+      } catch (e) {
+        this.editError = 'YAML parse error: ' + e.message;
+        return;
+      }
+      const r = await fetch('/agents/' + this.selected, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ frontmatter: fm, body: this.editBody }),
+      });
+      if (!r.ok) {
+        this.editError = 'save failed: ' + r.status;
+        return;
+      }
+      await this.refreshAgents();
+      this.selectedAgent = this.agentDetails.find(a => a.name === this.selected) ?? null;
+      this.computeGraph();
+      this.editMode = false;
+    },
+
+    async fire(name) {
+      await fetch('/scheduler/fire/' + name, { method: 'POST' });
+      setTimeout(() => this.poll(), 300);
+    },
+
+    async sendFakeTelegram() {
+      await fetch('/dispatch', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          to_agent: 'concierge',
+          message: '[telegram_inbound chat_id=999888777] the $4,200 one — investigate it please',
+          from_agent: 'telegram:999888777',
+        }),
+      });
+      setTimeout(() => this.poll(), 300);
+    },
+
+    duration(r) {
+      if (!r.ended_at || !r.started_at) return '—';
+      const ms = new Date(r.ended_at) - new Date(r.started_at);
+      return (ms / 1000).toFixed(1) + 's';
+    },
+
+    onCanvasClick(e) {
+      const g = e.target.closest('[data-agent]');
+      if (g) this.selectAgent(g.dataset.agent);
+    },
+
+    async openDiff() {
+      this.diffOpen = true;
+      this.diffText = '';
+      this.commits = await fetch('/agents/commits').then(r => r.json());
+      if (this.commits.length >= 2) {
+        this.diffFrom = this.commits[1].sha;
+        this.diffTo = this.commits[0].sha;
+        this.loadDiff();
+      } else if (this.commits.length === 1) {
+        this.diffFrom = this.commits[0].sha;
+        this.diffTo = this.commits[0].sha;
+      }
+    },
+
+    async loadDiff() {
+      if (!this.diffFrom || !this.diffTo) return;
+      const url = `/agents/diff?from=${encodeURIComponent(this.diffFrom)}&to=${encodeURIComponent(this.diffTo)}`;
+      const r = await fetch(url);
+      if (!r.ok) { this.diffText = `error: ${r.status}`; return; }
+      const j = await r.json();
+      this.diffText = j.diff || '(no changes)';
+    },
+
+    get diffHTML() {
+      const esc = (s) => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+      if (!this.diffText) return '<div class="text-slate-600 py-8 text-center">Pick two commits and Compare.</div>';
+      const lines = this.diffText.split('\n');
+      const out = lines.map(line => {
+        let color = 'text-slate-400';
+        if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) color = 'text-slate-500';
+        else if (line.startsWith('@@')) color = 'text-cyan-300';
+        else if (line.startsWith('+')) color = 'text-emerald-400';
+        else if (line.startsWith('-')) color = 'text-red-400';
+        return `<div class="${color}">${esc(line) || '&nbsp;'}</div>`;
+      }).join('');
+      return out;
+    },
+
+    get graphHTML() {
+      const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      let s = `<defs><marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrow-head"/></marker></defs>`;
+      for (const e of this.edges) {
+        const cls = 'edge-path' + (e.feedback ? ' feedback' : '');
+        s += `<g><path d="${e.path}" class="${cls}" marker-end="url(#arrow)"/>`;
+        s += `<text x="${e.labelX}" y="${e.labelY}" class="edge-label" text-anchor="middle">${esc(e.label)}</text></g>`;
+      }
+      for (const n of this.nodes) {
+        const running = (this.metrics.queue_depths?.[n.name] ?? 0) > 0;
+        const active = this.selected === n.name;
+        const cls = 'node-rect' + (active ? ' active' : '') + (running ? ' running' : '');
+        s += `<g data-agent="${esc(n.name)}" style="cursor:pointer">`;
+        s += `<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="8" class="${cls}"/>`;
+        s += `<text x="${n.x + n.w/2}" y="${n.y + 24}" text-anchor="middle" fill="#f1f5f9" font-size="14" font-weight="600">${esc(n.name)}</text>`;
+        s += `<text x="${n.x + n.w/2}" y="${n.y + 42}" text-anchor="middle" fill="#64748b" font-size="10" font-family="ui-monospace,monospace">${esc((n.mode||'?').toUpperCase())}</text>`;
+        s += `<text x="${n.x + n.w/2}" y="${n.y + 58}" text-anchor="middle" fill="#94a3b8" font-size="10" font-family="ui-monospace,monospace">${esc(n.model||'')}</text>`;
+        s += `</g>`;
+      }
+      return s;
+    },
+
+    computeGraph() {
+      // Fixed positions for 4 known agents; extend if more get added.
+      const POS = {
+        fraud_screener: { x: 320, y: 30 },
+        concierge:      { x: 320, y: 200 },
+        investigator:   { x: 90,  y: 380 },
+        resolver:       { x: 550, y: 380 },
+      };
+      const W = 160, H = 80;
+      this.nodes = this.agentDetails.map(a => ({
+        name: a.name,
+        x: (POS[a.name] ?? { x: 320, y: 30 }).x,
+        y: (POS[a.name] ?? { x: 320, y: 30 }).y,
+        w: W, h: H,
+        mode: a.frontmatter?.mode,
+        model: a.frontmatter?.model,
+      }));
+      const center = n => ({ x: n.x + W/2, y: n.y + H/2 });
+      const edges = [];
+      this.agentDetails.forEach(a => {
+        const from = this.nodes.find(n => n.name === a.name);
+        if (!from) return;
+        (a.frontmatter?.dispatches_to ?? []).forEach((d, idx) => {
+          const target = typeof d === 'string' ? d : d.agent;
+          const label = typeof d === 'object' ? (d.when ?? '') : '';
+          const to = this.nodes.find(n => n.name === target);
+          if (!to) return;
+          const fc = center(from), tc = center(to);
+          // Offset endpoints to node edge boxes.
+          const dx = tc.x - fc.x, dy = tc.y - fc.y;
+          const len = Math.hypot(dx, dy) || 1;
+          const ux = dx/len, uy = dy/len;
+          // Move start out of source box and end short of target box.
+          const sx = fc.x + ux * (W/2 + 4) * Math.sign(Math.abs(dx) > Math.abs(dy) ? 1 : 0.3);
+          // Simpler: just draw from approx box-edge to approx box-edge along the line.
+          const startX = fc.x + ux * Math.min(W/2, Math.abs(dx) * 0.5);
+          const startY = fc.y + uy * Math.min(H/2, Math.abs(dy) * 0.5);
+          const endX = tc.x - ux * Math.min(W/2, Math.abs(dx) * 0.5);
+          const endY = tc.y - uy * Math.min(H/2, Math.abs(dy) * 0.5);
+          // Check feedback: target already has an edge back to source
+          const feedback = (this.agentDetails.find(x => x.name === target)?.frontmatter?.dispatches_to ?? [])
+            .some(dd => (typeof dd === 'string' ? dd : dd.agent) === a.name);
+          edges.push({
+            from: a.name, to: target, idx,
+            path: `M ${startX} ${startY} L ${endX} ${endY}`,
+            labelX: (startX + endX) / 2,
+            labelY: (startY + endY) / 2 - 6,
+            label: label.length > 38 ? label.slice(0, 36) + '…' : label,
+            feedback,
+          });
+        });
+      });
+      this.edges = edges;
+    },
+  };
+}
+</script>
+</body>
+</html>

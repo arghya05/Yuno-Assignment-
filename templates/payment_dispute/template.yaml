@@ -1,0 +1,40 @@
+name: payment_dispute
+title: Payment Dispute Triage
+description: >
+  A purely conversational variant — no cron. A human opens a dispute over
+  Telegram ("customer is disputing txn_044"). The concierge gathers context,
+  hands the transaction to the investigator for a verdict, relays it back to
+  the human, and on approval dispatches the resolver to refund or reject.
+  Same agents as fraud_monitor, different entry point and no scanner.
+
+# Entry point — human-initiated, no schedule
+entry:
+  agent: concierge
+  trigger: telegram
+  schedule: null
+
+# Agents that participate (shared SOUL.md files in ../../agents/)
+agents:
+  - concierge        # conversational · sonnet · human-facing on Telegram
+  - investigator     # autonomous · sonnet · assesses dispute validity
+  - resolver         # autonomous · haiku · executes refund / reject
+
+# Flow, with routing conditions and the feedback loop
+flow:
+  - from: concierge
+    to: investigator
+    when: "user asks for deeper analysis of a specific transaction"
+  - from: investigator
+    to: concierge
+    when: "investigation complete (verdict ready)"
+  - from: investigator
+    to: concierge
+    when: "need clarification from the human before continuing"   # feedback loop
+  - from: concierge
+    to: resolver
+    when: "investigator returns a verdict and the human approves the action"
+  - from: resolver
+    to: concierge
+    when: "action complete (success or failure)"
+
+channel: telegram

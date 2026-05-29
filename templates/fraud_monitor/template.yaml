@@ -1,0 +1,44 @@
+name: fraud_monitor
+title: Fraud Monitoring & Escalation
+description: >
+  Always-on fraud watch. A scanner wakes on a cron schedule, scores recent
+  transactions, and escalates anything suspicious to a human via Telegram.
+  The human can ask for a deeper investigation and approve a blocking action,
+  all without leaving the chat. This is the template demonstrated in the
+  end-to-end demo.
+
+# Entry point — how a run of this workflow begins
+entry:
+  agent: fraud_screener
+  trigger: cron
+  schedule: "0 * * * *"   # hourly; also fireable manually from the dashboard
+
+# Agents that participate (each is a SOUL.md in ../../agents/)
+agents:
+  - fraud_screener   # autonomous · haiku · scans + scores transactions
+  - concierge        # conversational · sonnet · human-facing on Telegram
+  - investigator     # autonomous · sonnet · deep analysis of one transaction
+  - resolver         # autonomous · haiku · executes the approved action
+
+# Flow, with routing conditions and the feedback loop
+flow:
+  - from: fraud_screener
+    to: concierge
+    when: "any transaction in the batch has fraud_score > 0.7"
+  - from: concierge
+    to: investigator
+    when: "user asks for deeper analysis of a specific transaction"
+  - from: investigator
+    to: concierge
+    when: "investigation complete (verdict ready)"
+  - from: investigator
+    to: concierge
+    when: "need clarification from the human before continuing"   # feedback loop
+  - from: concierge
+    to: resolver
+    when: "investigator returns a verdict and the human approves the action"
+  - from: resolver
+    to: concierge
+    when: "action complete (success or failure)"
+
+channel: telegram   # the human-in-the-loop surface
